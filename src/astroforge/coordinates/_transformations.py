@@ -327,7 +327,6 @@ def GCRSToCIRS(time: float, X: NDArray[np.float64]) -> NDArray[np.float64]:
     return Y
 
 
-@njit
 def GCRSToITRS(time: float, X: NDArray[np.float64]) -> NDArray[np.float64]:
     """Converts a vector from Geocentric Celestial Reference System (GCRS) to
     International Terrestrial Reference System (ITRS).
@@ -453,7 +452,6 @@ def GCRSToTETED(time, X):
     return Y
 
 
-@njit
 def ITRSToGCRS(time, X):
     """Converts a vector from the International Terrestrial Reference System (ITRS) to
     the Geocentric Celestrial Reference System (GCRS).
@@ -482,7 +480,6 @@ def ITRSToGCRS(time, X):
     return Y
 
 
-@njit
 def ITRSToMEMED(
     time: float,
     X: NDArray[np.float64],
@@ -551,7 +548,6 @@ def ITRSToTIRS(
     return Y
 
 
-@njit
 def ITRSToTETED(
     time: float,
     X: NDArray[np.float64],

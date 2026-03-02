@@ -67,3 +67,37 @@ Either:
 - Python: 3.13.5
 - NumPy: 2.3.4
 - Numba: latest (via pip)
+
+## 2. `propagator()` returns list instead of ndarray (numpy 2.x)
+
+**Date**: 2026-03-02
+**Severity**: Medium — blocks MaDDG `ContinuousThrustSatellite.propagate()`
+**Commit**: `23f2ad2` (main, latest)
+
+### Description
+
+`astroforge/propagators/_propagator.py` line 56: `return out.y.T` assumes `solve_ivp` returns `out.y` as a numpy array. Under certain conditions with numpy 2.x, `out.y` is a Python list, causing `AttributeError: 'list' object has no attribute 'T'`.
+
+### Error
+
+```
+File "astroforge/propagators/_propagator.py", line 56, in propagator
+    return out.y.T
+           ^^^^^^^
+AttributeError: 'list' object has no attribute 'T'
+```
+
+### Impact
+
+- **MaDDG `ContinuousThrustSatellite.propagate()`** calls this propagator path, so all continuous thrust maneuver simulations crash.
+- Regular `Satellite.propagate()` (impulsive maneuvers) is unaffected — uses a different code path.
+
+### Suggested Fix
+
+```python
+return np.asarray(out.y).T  # Convert list to array before transposing
+```
+
+### Workaround (won-sbss)
+
+Use `ImpulsiveManeuver` only. Continuous maneuvers are not used in the current pipeline.

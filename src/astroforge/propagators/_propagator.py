@@ -53,7 +53,7 @@ def propagator(
     out = solve_ivp(fm, (t[0], t[-1]), x0, t_eval=t, atol=atol, rtol=rtol, **kwargs)
 
     if out.success:
-        return out.y.T
+        return np.asarray(out.y).T
     else:
         raise RuntimeError(
             f"Numeric integration failed with message:\n\t{out.message}\n"
