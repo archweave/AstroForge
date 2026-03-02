@@ -480,6 +480,7 @@ def ITRSToGCRS(time, X):
     return Y
 
 
+@njit
 def ITRSToMEMED(
     time: float,
     X: NDArray[np.float64],
@@ -515,6 +516,16 @@ def ITRSToMEMED(
     return Y
 
 
+@njit
+def _ITRSToTIRS_inner(
+    xp: float,
+    yp: float,
+    X: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Numba-jitted inner rotation for ITRS→TIRS (polar motion)."""
+    return Ry(xp * pi / 180 / 3600) @ Rx(yp * pi / 180 / 3600) @ X
+
+
 def ITRSToTIRS(
     mjd: float,
     X: NDArray[np.float64],
@@ -525,7 +536,7 @@ def ITRSToTIRS(
 
     Parameters
     ----------
-    time : float
+    mjd : float
         Time at which to evaluate the polar motion, specified as Modified Julian Date (MJD),
         in the UT1 time system.
     X : NDArray[np.float64]
@@ -538,14 +549,7 @@ def ITRSToTIRS(
     """
 
     xp, yp = polarmotion(mjd)
-    if (isinstance(xp, float)) and (isinstance(yp, float)):
-        Y = Ry(xp * pi / 180 / 3600) @ Rx(yp * pi / 180 / 3600) @ X
-    else:
-        raise TypeError(
-            "The output of polarmotion for this operation must be type `float` "
-            "to support usage in rotation matrix methods."
-        )
-    return Y
+    return _ITRSToTIRS_inner(float(xp), float(yp), X)
 
 
 def ITRSToTETED(
@@ -1349,12 +1353,22 @@ def TETEDToTEMED(time, X):
     return Y
 
 
+@njit
+def _TIRSToITRS_inner(
+    xp: float,
+    yp: float,
+    X: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Numba-jitted inner rotation for TIRS→ITRS (inverse polar motion)."""
+    return Rx(-yp * pi / 180 / 3600) @ Ry(-xp * pi / 180 / 3600) @ X
+
+
 def TIRSToITRS(
     mjd: float,
     X: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     """Rotate a cartesian vector from the Terrestrial Intermediate Reference System (TIRS)
-    to the International Terrestrial Reference System (TIRS). TIRS and ITRS only differ by
+    to the International Terrestrial Reference System (ITRS). TIRS and ITRS only differ by
     the polar motion.
 
     Parameters
@@ -1371,15 +1385,8 @@ def TIRSToITRS(
         Rotated vector
     """
 
-    (xp, yp) = polarmotion(mjd)
-    if isinstance(xp, float) and isinstance(yp, float):
-        Y = Rx(-yp * pi / 180 / 3600) @ Ry(-xp * pi / 180 / 3600) @ X
-    else:
-        raise TypeError(
-            "The output of polarmotion for this operation must be type `float` "
-            "to support usage in rotation matrix methods."
-        )
-    return Y
+    xp, yp = polarmotion(mjd)
+    return _TIRSToITRS_inner(float(xp), float(yp), X)
 
 
 def cartesian_to_keplerian(

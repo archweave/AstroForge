@@ -1,103 +1,100 @@
 # AstroForge — Known Issues (archweave fork)
 
-## 1. ITRSToTETED crashes: ITRSToTIRS missing @njit decorator
+## 1. `ITRSToTIRS` / `TIRSToITRS` — `isinstance` incompatible with Numba
 
-**Date**: 2025-03-02
-**Severity**: High — blocks MaDDG GroundOpticalSensor.observe()
-**Commit**: `23f2ad2` (main, latest)
-**Upstream**: https://github.com/mit-ll/AstroForge
+**Date**: 2026-03-02
+**Severity**: High — blocks any `@njit` caller that needs polar motion
+**Status**: **FIXED** in archweave fork
 
 ### Description
 
-`ITRSToTETED` (line 554 in `_transformations.py`) is decorated with `@njit`, but it calls `ITRSToTIRS` (line 521) which is a plain Python function without `@njit`. Numba cannot call non-jitted functions from within a jitted function.
+`ITRSToTIRS` and `TIRSToITRS` use `isinstance()` checks and `raise TypeError`, which are incompatible with Numba's `@njit` mode. Any jitted function calling them will fail.
 
-### Error
+### Fix Applied
 
-```
-numba.core.errors.TypingError: Failed in nopython mode pipeline (step: nopython frontend)
-Untyped global name 'ITRSToTIRS': Cannot determine Numba type of <class 'function'>
-
-File "astroforge/coordinates/_transformations.py", line 587:
-def ITRSToTETED(
-    ...
-    X2 = ITRSToTIRS(time, X)
-    ^
-```
-
-### Root Cause
-
-`ITRSToTIRS` (line 521) uses `isinstance()` checks and `raise TypeError`, which prevent it from being decorated with `@njit`. However, `ITRSToTETED` (decorated with `@njit`) calls it directly.
+Split each into a `@njit` inner function + non-jitted wrapper:
 
 ```python
-# Line 521 — NOT @njit decorated
+@njit
+def _ITRSToTIRS_inner(xp: float, yp: float, X):
+    return Ry(xp * pi / 180 / 3600) @ Rx(yp * pi / 180 / 3600) @ X
+
 def ITRSToTIRS(mjd, X):
     xp, yp = polarmotion(mjd)
-    if (isinstance(xp, float)) and (isinstance(yp, float)):  # incompatible with @njit
-        Y = Ry(xp * pi / 180 / 3600) @ Rx(yp * pi / 180 / 3600) @ X
-    else:
-        raise TypeError(...)
-    return Y
-
-# Line 554 — @njit decorated
-@njit
-def ITRSToTETED(time, X, V=None):
-    ...
-    X2 = ITRSToTIRS(time, X)  # CRASH: calling non-jitted from jitted
+    return _ITRSToTIRS_inner(float(xp), float(yp), X)
 ```
 
-### Impact
+Same pattern for `_TIRSToITRS_inner` / `TIRSToITRS`.
 
-- **MaDDG `GroundOpticalSensor.observe()`** calls `ITRSToTETED` internally via `_site_loc_TETED()`, so all ground sensor observations crash.
-- Any code using `afc.PosVelConversion(afc.ITRSToTETED, ...)` will also crash.
-- `TETEDToITRS` (line 460) has the same pattern — it also calls `ITRSToTIRS` from within `@njit`.
+### Additional changes
 
-### Workaround (won-sbss)
+- `ITRSToMEMED`: restored `@njit` decorator (safe — uses ERA path, no polar motion call).
+  This ensures `F_geo_MEMED` (@njit) → `ITRSToMEMED` chain works correctly.
+- `GCRSToITRS`, `ITRSToGCRS`, `ITRSToTETED`: correctly left without `@njit`
+  (they call polar motion wrappers and also hit Bug #3 via `CIRSToTETED`).
 
-Our `compute_ground_visibility()` uses a self-contained GMST rotation (`_ecef_to_eci_gmst`) instead of AstroForge's `ITRSToTETED`, so our ground visibility pipeline is unaffected.
-
-### Suggested Fix
-
-Either:
-1. Make `ITRSToTIRS` compatible with `@njit` (remove `isinstance` checks, use typed alternatives)
-2. Remove `@njit` from `ITRSToTETED` and `TETEDToITRS`
-3. Inline the polar motion rotation within the jitted functions
-
-### Environment
-
-- Python: 3.13.5
-- NumPy: 2.3.4
-- Numba: latest (via pip)
+---
 
 ## 2. `propagator()` returns list instead of ndarray (numpy 2.x)
 
 **Date**: 2026-03-02
 **Severity**: Medium — blocks MaDDG `ContinuousThrustSatellite.propagate()`
-**Commit**: `23f2ad2` (main, latest)
+**Status**: **FIXED** in archweave fork
 
 ### Description
 
-`astroforge/propagators/_propagator.py` line 56: `return out.y.T` assumes `solve_ivp` returns `out.y` as a numpy array. Under certain conditions with numpy 2.x, `out.y` is a Python list, causing `AttributeError: 'list' object has no attribute 'T'`.
+`astroforge/propagators/_propagator.py` line 56: `return out.y.T` assumes `solve_ivp` returns `out.y` as a numpy array. Under numpy 2.x, `out.y` can be a Python list, causing `AttributeError: 'list' object has no attribute 'T'`.
 
-### Error
-
-```
-File "astroforge/propagators/_propagator.py", line 56, in propagator
-    return out.y.T
-           ^^^^^^^
-AttributeError: 'list' object has no attribute 'T'
-```
-
-### Impact
-
-- **MaDDG `ContinuousThrustSatellite.propagate()`** calls this propagator path, so all continuous thrust maneuver simulations crash.
-- Regular `Satellite.propagate()` (impulsive maneuvers) is unaffected — uses a different code path.
-
-### Suggested Fix
+### Fix Applied
 
 ```python
 return np.asarray(out.y).T  # Convert list to array before transposing
 ```
 
+---
+
+## 3. `CIRSToTETED` (@njit) calls non-jittable `nutate` — PRE-EXISTING
+
+**Date**: 2026-03-02
+**Severity**: High — blocks `ITRSToTETED`, `ITRSToGCRS`, `GCRSToITRS`, `TETEDToITRS`
+**Status**: OPEN (pre-existing in upstream MIT-LL code)
+
+### Description
+
+`CIRSToTETED` (line ~184) is decorated with `@njit` but calls `nutate()` from `_utilities.py`, which is not Numba-compatible. This causes a `TypingError` at Numba JIT compilation time.
+
+### Error
+
+```
+numba.core.errors.TypingError: Failed in nopython mode pipeline (step: nopython frontend)
+Untyped global name 'nutate': Cannot determine Numba type of <class 'function'>
+
+File "_transformations.py", line 208:
+def CIRSToTETED(
+    ...
+    (dpsi, deps, TrueObliquity, _) = nutate(time)
+    ^
+```
+
+### Impact
+
+All functions that call `CIRSToTETED` fail:
+- `ITRSToTETED` — used by MaDDG `GroundOpticalSensor.observe()` (via `_site_loc_TETED`)
+- `ITRSToGCRS` / `GCRSToITRS` — GCRS frame conversions
+- `TETEDToITRS` — reverse TETED conversion
+
+Functions using the MEMED path (`ITRSToMEMED` → `CIRSToMEMED`) are **unaffected** since `CIRSToMEMED` does not call `nutate`.
+
 ### Workaround (won-sbss)
 
-Use `ImpulsiveManeuver` only. Continuous maneuvers are not used in the current pipeline.
+Our `compute_ground_visibility()` uses a self-contained GMST rotation (`_ecef_to_eci_gmst`) instead of AstroForge's `ITRSToTETED`.
+
+### Suggested Fix
+
+Either make `nutate()` Numba-compatible, or remove `@njit` from `CIRSToTETED` (and propagate that change to all callers in the `@njit` chain).
+
+### Environment
+
+- Python: 3.13.5
+- NumPy: 2.3.4
+- Numba: 0.61.x
